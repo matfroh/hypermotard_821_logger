@@ -1,0 +1,28 @@
+Name,ShortName,ModeAndPID,Equation,Min Value,Max Value,Units,Header
+Ducati 821 Engine RPM,RPM,022130,A*256+B,0,11000.0,rpm,7E0
+Ducati 821 Coolant Temp (ECT),ECT,022131,B-40,-10,130.0,°C,7E0
+Ducati 821 Intake Air Temp (IAT),IAT,022132,B-40,-10,80.0,°C,7E0
+Ducati 821 Oil / Secondary Temp,OilTemp,022134,B-40,-10,150.0,°C,7E0
+Ducati 821 Vehicle Speed,Speed,022135,A*256+B,0,260.0,km/h,7E0
+Ducati 821 Battery Voltage,BattV,022136,(A*256+B)*0.0625,0,16.0,V,7E0
+Ducati 821 Barometric Pressure,Baro,022138,(A*256+B)/10,50,110.0,kPa,7E0
+Ducati 821 Switched Voltage,SwBattV,02213A,(A*256+B)*0.0625,0,16.0,V,7E0
+Ducati 821 Twistgrip Pos (APS),APS,02213B,(A*256+B)/10,0,100.0,%,7E0
+Ducati 821 Throttle Body 1 (TPS),TPS1,02213C,(A*256+B)/10,0,100.0,%,7E0
+Ducati 821 MAP Cyl 1 (Horiz),MAP1,02213D,(A*256+B)/10,0,120.0,kPa,7E0
+Ducati 821 Throttle Body 2 (TPS2),TPS2,02213E,(A*256+B)/10,0,100.0,%,7E0
+Ducati 821 MAP Cyl 2 (Vert),MAP2,02213F,(A*256+B)/10,0,120.0,kPa,7E0
+Ducati 821 Lambda O2 Cyl 1 (Horiz),O2_B1,022140,(A*256+B)*0.005,0,1.2,V,7E0
+Ducati 821 Lambda O2 Cyl 2 (Vert),O2_B2,022141,(A*256+B)*0.005,0,1.2,V,7E0
+Ducati 821 Actual Inj Time Cyl 1,InjAct1,022144,(A*256+B)/100,0,25.0,ms,7E0
+Ducati 821 Actual Inj Time Cyl 2,InjAct2,022145,(A*256+B)/100,0,25.0,ms,7E0
+Ducati 821 Base Fuel Time Cyl 1,InjBase1,022146,(A*256+B)/100,0,25.0,ms,7E0
+Ducati 821 Base Fuel Time Cyl 2,InjBase2,022147,(A*256+B)/100,0,25.0,ms,7E0
+Ducati 821 Target Fuel Time Cyl 1,InjTgt1,022148,(A*256+B)/100,0,25.0,ms,7E0
+Ducati 821 Target Fuel Time Cyl 2,InjTgt2,022149,(A*256+B)/100,0,25.0,ms,7E0
+Ducati 821 Ignition Advance,IgnAdv,02214A,(A*256+B)/10,-10,60.0,°,7E0
+Ducati 821 Idle Stepper Target,IdleStep,022150,A*256+B,0,2000.0,steps,7E0
+Ducati 821 Lambda Integrator Cyl 1,O2Int1,022161,A*256+B,0,500.0,raw,7E0
+Ducati 821 Lambda Integrator Cyl 2,O2Int2,022162,A*256+B,0,500.0,raw,7E0
+Ducati 821 Engine Run Counter,RunCnt,022163,A*256+B,0,65535.0,raw,7E0
+Ducati 821 Gear / Engine State,GearState,022165,A,0,10.0,state,7E0
