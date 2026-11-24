@@ -84,7 +84,7 @@ All commands below are strictly **read-only** (`Service 0x21`) sent to header `7
 | **`022131`** | `046131002D` | — | **Engine Coolant Temp (ECT)** (`45 - 40 = 5°C`) | `B-40` | `E-40` | `°C` |
 | **`022132`** | `0461320031` | — | **Intake Air Temp (IAT)** (`49 - 40 = 9°C`) | `B-40` | `E-40` | `°C` |
 | **`022134`** | `046134002D` | — | **Oil / Secondary Temp** (`45 - 40 = 5°C`) | `B-40` | `E-40` | `°C` |
-| **`022135`** | `0461350000` | — | **Vehicle Speed** | `A*256+B` | `D*256+E` | `km/h` |
+| **`022135`** | `0461350000` | — | **Vehicle Speed (_wrong_to be corrected_)** | `A*256+B` | `D*256+E` | `km/h` |
 | **`022136`** | `04613600CC` | — | **Battery Voltage** (`204 * 0.0625 = 12.75V`) | `(A*256+B)*0.0625` | `(D*256+E)*0.0625` | `V` |
 | **`022138`** | `04613803C8` | — | **Barometric Pressure** (`968 / 10 = 96.8 kPa`) | `(A*256+B)/10` | `(D*256+E)/10` | `kPa` |
 | **`02213A`** | `04613A00CC` | — | **Switched / Reference Voltage** (`12.75V`) | `(A*256+B)*0.0625` | `(D*256+E)*0.0625` | `V` |
