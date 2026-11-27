@@ -1,194 +1,155 @@
-# Ducati Hypermotard 821 (Marelli 7SM) & Porsche 991.1 OBD2 / KWP2000 Data Logging & Telemetry Guide
+# Ducati Hypermotard 821 (Marelli 7SM ECU) — Complete OBD2 / KWP2000 Telemetry & Tuning Guide
 
-A comprehensive technical reference for logging live engine telemetry over Bluetooth ELM327 (`v1.5`) on Android (**Car Scanner ELM OBD2**), decoding Magneti Marelli 7SM KWP2000-over-CAN parameters, calculating Virtual Road Dyno power/torque curves, and building RPM vs. TPS fuel/usage heatmaps.
-
----
-
-## 1. Hardware & Physical Layer Setup
-
-### Ducati Hypermotard 821 (2013–2015, Euro 3, Magneti Marelli 7SM ECU)
-* **Adapter:** Genuine **ELM327 v1.5** Bluetooth adapter (e.g., Lonelec). Budget `v2.1` clones lack raw ISO-TP / CAN formatting commands (`ATCAF0`, `ATSP6`) and will fail to handshake.
-* **Diagnostic Cable:** Ducati 4-pin DDA connector (located under the seat) to 16-pin OBD2 female adapter.
-  * **Ducati Pin 1** (Red/White) $\rightarrow$ **OBD2 Pin 16** (`+12V` Battery)
-  * **Ducati Pin 2** (Black) $\rightarrow$ **OBD2 Pin 4 & 5** (`GND`)
-  * **Ducati Pin 3** (White/Yellow) $\rightarrow$ **OBD2 Pin 6** (`CAN-High`, 500 kbps)
-  * **Ducati Pin 4** (White/Blue) $\rightarrow$ **OBD2 Pin 14** (`CAN-Low`, 500 kbps)
-* **Bike State:** Ignition key **ON** and red engine kill-switch in **RUN** (the Marelli 7SM CAN diagnostic responder does not power up when the kill-switch is in STOP).
-
-### Porsche 991.1 Carrera S (2012, 3.8L MA1.03 DFI, Siemens SDI 9.1 ECU)
-* **Port:** Standard 16-pin OBD2 port under the driver's footwell dashboard (no adapter cable required).
-* **Profile:** Select **Porsche / VAG OBD-II** in Car Scanner. Supports standard OBD2 Mode `01` PIDs including factory wideband LSU O2 Lambda (`0124`/`0128` or `0134`/`0138`), Calculated Engine Load (`0104`), MAF (`0110`), Fuel Trims (`0106`–`0109`), and Ignition Timing Advance (`010E`).
+This repository documents the physical wiring, ELM327 initialization commands, complete verified **KWP2000 (`Service 0x21`)** diagnostic sensor table (`0x30`–`0x92`), Android Python data-logging architecture, and formulas for **Fuel Mapping / AFR Analysis** and **Virtual Road Dyno** power/torque curves on the **Ducati Hypermotard 821 (2013–2015, Euro 3, Magneti Marelli 7SM ECU)**.
 
 ---
 
-## 2. Why Standard OBD2 Fails on the Hypermotard 821 (And How to Fix It)
+## 1. Hardware & Physical Wiring
 
-The 2013–2015 Hypermotard 821 predates mandatory Euro 4/5 motorcycle OBD2 standardization:
-1. **Ignores Functional Broadcast (`7DF`):** The ECU only responds to physical CAN header **`7E0`** (replying on **`7E8`**). The BBS / dashboard module responds on **`7E2`** (replying on **`7EA`**).
-2. **Rejects Standard OBD2 (`Mode 01`) and UDS (`Service 22`):**
-   * `02 10 81` $\rightarrow$ `03 7F 10 12` (Sub-function not supported)
-   * `03 22 F1 84` $\rightarrow$ `03 7F 22 11` (UDS Service `22` not supported)
-3. **Uses KWP2000-over-CAN (`ISO 15765-4`, 500 kbps) with Manual ISO-TP PCI Length Bytes (`ATCAF0`):**
-   * Opening a standard diagnostic session requires sending **`02 10 01`**, which returns **`02 50 01`**.
-   * Live engine parameters are read via **KWP2000 `ReadDataByLocalIdentifier` (`Service 21`)** using 2-byte requests (`02 21 xx`).
+### Ducati 4-Pin DDA to 16-Pin OBD2 Adapter Pinout
+Pre-Euro 5 Ducatis use an under-seat 4-pin diagnostic connector (DDA) rather than a standard 16-pin J1962 port. Ensure your adapter cable maps the **CAN bus pins** (many cheap 3-wire K-Line Ducati cables leave CAN-H/CAN-L disconnected):
+
+| Ducati 4-Pin DDA | Bike Wire Color (Typical) | Standard 16-Pin OBD2 | Signal Function |
+| :--- | :--- | :--- | :--- |
+| **Pin 1** | Red / White | **Pin 16** | +12V Switched Battery Power |
+| **Pin 2** | Black | **Pins 4 & 5** | Chassis / Signal Ground |
+| **Pin 3** | White / Yellow | **Pin 6** | CAN-High (500 kbps) |
+| **Pin 4** | White / Blue | **Pin 14** | CAN-Low (500 kbps) |
+
+### ELM327 Adapter Requirements
+* **Required Chipset:** Genuine **ELM327 v1.4 or v1.5** (e.g., Lonelec Bluetooth 1.5, OBDLink LX/MX+).
+* **Incompatible Chipsets:** Generic budget **ELM327 v2.1** clones frequently lack `ATCAF0` (manual ISO-TP PCI length byte formatting) and raw CAN header routing (`ATSH` / `ATCRA`), causing connection failures on the Marelli 7SM.
+* **Bike State:** Ignition key **ON** and red engine kill-switch in **RUN** (the Marelli 7SM CAN diagnostic responder does not power up when the kill-switch is OFF).
 
 ---
 
-## 3. Android App Setup: Car Scanner ELM OBD2 (Free Tier)
+## 2. Protocol Architecture & ELM327 Initialization
 
-The free tier of **Car Scanner ELM OBD2** supports custom initialization strings, custom KWP2000 PIDs, and native **CSV export** without requiring a paid upgrade.
+The 2013–2015 Hypermotard 821 predates mandatory Euro 5 OBD2 standardization:
+1. **Standard OBD2 Mode `01` (`0100`, `010C`, `0111`) is unsupported** (returns `7F 01 11`).
+2. **UDS Service `22` (`22 xxxx`) is unsupported** (returns `7F 22 11`).
+3. **KWP2000-over-CAN (`ISO 15765-4`, 11-bit, 500 kbps) is active** on two diagnostic modules:
+   * **Engine ECU (`7E0` / `7E8`):** Requires `ATCAF0` (manual PCI length byte) and session control `02 10 01` (replies `02 50 01`). Serves **89 active `02 21 xx` channels** (`0x30`–`0x92`) continuously—both stationary and while riding.
+   * **BBS / Black Box System (`7E2` / `7EA`):** Opens with `02 10 81` (`02 50 81`), **but locks out diagnostic queries while the motorcycle is in motion** as an ABS/DTC safety measure. All riding telemetry—including **Vehicle Speed (`02217A`)**—must therefore be polled from the **Engine ECU (`7E0`)**.
 
-### A. Connection & Advanced ELM327 Settings
-Navigate to **Settings $\rightarrow$ Connection**:
-* **Connection Profile:** `OBD-II / EOBD` (generic)
-* **Protocol:** `6 - ISO 15765-4 CAN (11 bit ID, 500 kbaud)`
-
-Navigate to **Settings $\rightarrow$ Connection $\rightarrow$ Advanced settings**:
-* **ELM327 adaptive timings:** `Automatic 1` *(switch to `Off` if rapid throttle transitions drop packets)*
-* **ELM327 send ATST:** `Don't send` *(or `Send 32`)*
-* **Custom functional header:** `7E0`
-* **PID command to check connection:** `021001`
-* **Decode positive response to confirm successful connection:** `OFF` *(crucial—ECU returns `025001`, not OBD2 `4100`)*
-* **Tester present command:** `023E00` *(or `021001` to keep the KWP2000 session from timing out after ~4 seconds)*
-* **Use OBD2 PIDs:** `OFF` *(prevents polling unsupported Mode `01` PIDs once Custom PIDs are added)*
-* **OBDonUDS support:** `OFF`
-* **Request ECU information:** `OFF`
-
-### B. Raw ELM327 Terminal Initialization Sequence
-For manual verification in **Car Scanner Terminal** (or `PuTTY` / `Tera Term` / `CoolTerm` / `pyserial` on desktop):
-
+### Exact ELM327 Initialization Sequence
 ```text
-ATZ
-ATSP6
-ATE0
-ATH0
-ATS0
-ATCAF0
-ATSH7E0
-ATCRA7E8
-021001
+ATZ          # Reset ELM327
+ATE0         # Echo OFF
+ATL0         # Linefeeds OFF
+ATS0         # Spaces OFF
+ATH0         # Headers OFF
+ATSP6        # Protocol 6: ISO 15765-4 CAN (11-bit ID, 500 kbaud)
+ATCAF0       # CAN Auto-Formatting OFF (mandatory so 02xx length bytes pass raw)
+ATSH7E0      # Set Tx Header to Engine ECU (7E0)
+ATCRA7E8     # Filter Rx Header from Engine ECU (7E8)
+021001       # Start KWP2000 Diagnostic Session -> Expected reply: 025001
 ```
-Expected handshake response: `025001`
+*(Note: Keep the `021001` session alive every ~2–3 seconds during polling, and send `0120` [`StopDiagnosticSession`] + `ATPC` [`Protocol Close`] on clean disconnect).*
 
 ---
 
-## 4. Decoded Ducati Hypermotard 821 (Marelli 7SM) KWP2000 PIDs
+## 3. Complete Verified Marelli 7SM Sensor Map (`7E0` / `7E8`)
 
-All commands below are strictly **read-only** (`Service 0x21`) sent to header `7E0` (receiving from `7E8`) with `ATCAF0` enabled after opening session `021001`.
+All commands below were empirically verified on a live Hypermotard 821 across stationary key-on, cold/warm idle, and street riding (`0x01`–`0xFE` full-spectrum scan). Every command uses the format `0221<PID>` and returns `0461<PID><HI><LO>` (or `0361<PID><BYTE>` for 8-bit flags), where **`X = A*256 + B`** is the 16-bit unsigned integer payload.
 
-### Complete Verified PID Table (`022130` – `022166`)
+### A. Core Engine, Throttle & Speed Channels
+| PID | Command | Parameter | Unit | Formula (`X = A*256+B`) | Verified Real-World Behavior |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **`30`** | `022130` | **Engine RPM** | `rpm` | `X` | `0` off; `1350–1720` idle; tracks live engine speed |
+| **`7A`** | `02217A` | **Vehicle Speed** | `km/h` | `X` | `0` stationary; tracks true road speed (`1–59+ km/h`) |
+| **`3B`** | `02213B` | **Twistgrip Position (APS)** | `%` | `X / 10` | `0.0%` closed grip; scales `0.0–100.0%` |
+| **`3C`** | `02213C` | **Throttle Body 1 Plate (TPS 1)** | `%` | `X / 10` | `16.6%` key-on; `12.0–13.4%` idle; RbW capped below ~7,500 RPM |
+| **`3E`** | `02213E` | **Throttle Body 2 Plate (TPS 2)** | `%` | `X / 10` | `16.7%` key-on; tracks Horizontal/Vertical butterfly sync |
+| **`8E`** | `02218E` | **Gear / Transmission Status** | `flag` | `A` (1-byte) | `1` = Neutral, `2` = 1st gear, `8` = 2nd+ gear |
 
-| Command (Hex) | Sample Key-On Reply | Sample Idling Reply | Decoded Sensor | Primary Formula (`A,B` = payload) | Shifted Formula (`D,E` if `04 61 xx` included) | Unit |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **`022130`** | `0461300000` | `0461300661` | **Engine RPM** (`0x0661` = `1633 rpm`) | `A*256+B` | `D*256+E` | `rpm` |
-| **`022131`** | `046131002D` | — | **Engine Coolant Temp (ECT)** (`45 - 40 = 5°C`) | `B-40` | `E-40` | `°C` |
-| **`022132`** | `0461320031` | — | **Intake Air Temp (IAT)** (`49 - 40 = 9°C`) | `B-40` | `E-40` | `°C` |
-| **`022134`** | `046134002D` | — | **Oil / Secondary Temp** (`45 - 40 = 5°C`) | `B-40` | `E-40` | `°C` |
-| **`022135`** | `0461350000` | — | **Vehicle Speed (_wrong_to be corrected_)** | `A*256+B` | `D*256+E` | `km/h` |
-| **`022136`** | `04613600CC` | — | **Battery Voltage** (`204 * 0.0625 = 12.75V`) | `(A*256+B)*0.0625` | `(D*256+E)*0.0625` | `V` |
-| **`022138`** | `04613803C8` | — | **Barometric Pressure** (`968 / 10 = 96.8 kPa`) | `(A*256+B)/10` | `(D*256+E)/10` | `kPa` |
-| **`02213A`** | `04613A00CC` | — | **Switched / Reference Voltage** (`12.75V`) | `(A*256+B)*0.0625` | `(D*256+E)*0.0625` | `V` |
-| **`02213B`** | `04613B0000` | `04613B0000` | **Twistgrip Position (APS)** (`0.0%` closed) | `(A*256+B)/10` | `(D*256+E)/10` | `%` |
-| **`02213C`** | `04613C00A6` | `04613C0080` | **Throttle Body 1 (TPS)** (`16.6%` key-on, `12.8%` idle) | `(A*256+B)/10` | `(D*256+E)/10` | `%` |
-| **`02213D`** | `04613D0356` | `04613D037C` | **MAP Cylinder 1 (Horizontal)** (`85.4`–`89.2 kPa`) | `(A*256+B)/10` | `(D*256+E)/10` | `kPa` |
-| **`02213E`** | `04613E00A7` | — | **Throttle Body 2 (TPS 2)** (`16.7%`) | `(A*256+B)/10` | `(D*256+E)/10` | `%` |
-| **`02213F`** | `04613F0359` | `04613F0381` | **MAP Cylinder 2 (Vertical)** (`85.7`–`89.7 kPa`) | `(A*256+B)/10` | `(D*256+E)/10` | `kPa` |
-| **`022140`** | `0461400043` | `046140001C` | **Lambda O2 Voltage Cyl 1 (Horizontal)** (`0.335V` / `0.140V`) | `(A*256+B)*0.005` | `(D*256+E)*0.005` | `V` |
-| **`022141`** | — | `046141001B` | **Lambda O2 Voltage Cyl 2 (Vertical)** (`0.135V`) | `(A*256+B)*0.005` | `(D*256+E)*0.005` | `V` |
-| **`022144`** | — | `0461440262` | **Actual Injector Pulse Width Cyl 1** (`6.10 ms`) | `(A*256+B)/100` | `(D*256+E)/100` | `ms` |
-| **`022145`** | — | `0461450247` | **Actual Injector Pulse Width Cyl 2** (`5.83 ms`) | `(A*256+B)/100` | `(D*256+E)/100` | `ms` |
-| **`022146`** | — | `04614601EE` | **Base Fuel Table Pulse Width Cyl 1** (`4.94 ms`) | `(A*256+B)/100` | `(D*256+E)/100` | `ms` |
-| **`022147`** | — | `04614701E5` | **Base Fuel Table Pulse Width Cyl 2** (`4.85 ms`) | `(A*256+B)/100` | `(D*256+E)/100` | `ms` |
-| **`022148`** | — | `046148025D` | **Secondary / Target Fuel Time Cyl 1** (`6.05 ms`) | `(A*256+B)/100` | `(D*256+E)/100` | `ms` |
-| **`022149`** | — | `0461490243` | **Secondary / Target Fuel Time Cyl 2** (`5.79 ms`) | `(A*256+B)/100` | `(D*256+E)/100` | `ms` |
-| **`02214A`** | — | `04614A006F` | **Ignition Timing Advance** (`11.1° BTDC`) | `(A*256+B)/10` | `(D*256+E)/10` | `°` |
-| **`022150`** | — | `0461500483` | **Idle Stepper / Air Control Target** (`1155`) | `A*256+B` | `D*256+E` | `steps` |
-| **`022161`** | — | `04616100DF` | **Closed-Loop Lambda Integrator Cyl 1** (`223`) | `A*256+B` | `D*256+E` | `raw` |
-| **`022162`** | — | `04616200E0` | **Closed-Loop Lambda Integrator Cyl 2** (`224`) | `A*256+B` | `D*256+E` | `raw` |
-| **`022163`** | — | `046163128B` | **Engine Run Counter / Cumulative Revs** | `A*256+B` | `D*256+E` | `raw` |
-| **`022165`** | — | `03616505` | **Gear / Engine State Flag** (`0x05`) | `A` | `D` | `state` |
+### B. Air Pressure & Temperature Channels
+| PID | Command | Parameter | Unit | Formula (`X = A*256+B`) | Verified Real-World Behavior |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **`38`** | `022138` | **Barometric / Ambient Pressure** | `kPa` | `X / 10` | `96.8 kPa` (~968 mbar at ~400m elevation; `10.4` status toggle) |
+| **`3D`** | `02213D` | **MAP Cylinder 1 (Horizontal)** | `kPa` | `X / 10` | `85.4 kPa` key-on; `88–90 kPa` idle; drops to `~61 kPa` under load |
+| **`3F`** | `02213F` | **MAP Cylinder 2 (Vertical)** | `kPa` | `X / 10` | `85.6 kPa` key-on; tracks Cylinder 1 intake vacuum |
+| **`31`** | `022131` | **Coolant / Sensor Temp 1** | `°C` | `X - 40` | `46` (`6°C` cold start) → `50` (`10°C`) |
+| **`32`** | `022132` | **Intake Air Temp (IAT)** | `°C` | `X - 40` | `55` (`15°C` ambient) → `69` (`29°C` airbox heat-soak) |
+| **`33`** | `022133` | **Engine Coolant Temp (ECT)** | `°C` | `X - 40` | `48` (`8°C` cold) → `145` (`105°C` full operating temperature) |
+| **`34`** | `022134` | **Engine Oil / Head Temp** | `°C` | `X - 40` | `48` (`8°C` cold) → `145` (`105°C` full operating temperature) |
 
-*(Note: Unsupported IDs such as `022101`–`022110`, `022139`, and `022151` safely return `037F2131` = Request Out of Range).*
+### C. Fuel Injection, Lambda O2 & Closed-Loop Trim Channels
+| PID | Command | Parameter | Unit | Formula (`X = A*256+B`) | Verified Real-World Behavior |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **`44`** | `022144` | **Actual Injector Pulse Width — Cyl 1** | `ms` | `X / 100` | `9.34 ms` key-on prime; `4.5–6.5 ms` idle; `8.88 ms` load |
+| **`45`** | `022145` | **Actual Injector Pulse Width — Cyl 2** | `ms` | `X / 100` | `9.40 ms` key-on prime; `4.4–6.3 ms` idle; `8.64 ms` load |
+| **`46`** | `022146` | **Base Fuel Map Pulse Width — Cyl 1** | `ms` | `X / 100` | Pre-correction base map time (`5.32 ms` idle vs `6.41 ms` actual) |
+| **`47`** | `022147` | **Base Fuel Map Pulse Width — Cyl 2** | `ms` | `X / 100` | Pre-correction base map time (`5.28 ms` idle vs `6.29 ms` actual) |
+| **`48`** | `022148` | **Effective Fuel Time (Post-Deadtime) — Cyl 1** | `ms` | `X / 100` | Tracks net fuel pulse (`9.34` key-on, `0` on decel fuel cut) |
+| **`49`** | `022149` | **Effective Fuel Time (Post-Deadtime) — Cyl 2** | `ms` | `X / 100` | Tracks net fuel pulse (`9.34` key-on, `0` on decel fuel cut) |
+| **`57`** | `022157` | **Narrowband O2 Sensor — Cyl 1** | `mV` | `X` | Actively oscillates `14–1059 mV` during closed-loop cruise |
+| **`58`** | `022158` | **Narrowband O2 Sensor — Cyl 2** | `mV` | `X` | Actively oscillates `14–845 mV` during closed-loop cruise |
+| **`59`** | `022159` | **Closed-Loop Fuel Trim Multiplier — Cyl 1** | `%` | `(X - 40000) / 400` | Centered at `40000` (`0.0%`); swings `36186` (`-9.5%`) to `46096` (`+15.2%`) |
+| **`5A`** | `02215A` | **Closed-Loop Fuel Trim Multiplier — Cyl 2** | `%` | `(X - 40000) / 400` | Centered at `40000` (`0.0%`); swings `36408` (`-9.0%`) to `45240` (`+13.1%`) |
+| **`61`** | `022161` | **Long-Term Adaptive Integrator — Cyl 1** | `raw` | `X` | Steady baseline `223` |
+| **`62`** | `022162` | **Long-Term Adaptive Integrator — Cyl 2** | `raw` | `X` | Steady baseline `224` |
 
-> **Byte Offset Verification Tip:** Because `ATCAF0` includes the `04` PCI length byte in the raw reply (`04 61 30 06 61`), test `022130` first using Car Scanner's built-in **Test** button. If `A*256+B` evaluates `04 61` (`1121`), shift all byte variables by 3 letters (`A` $\rightarrow$ `D`, `B` $\rightarrow$ `E`).
+### D. Ignition, Air Mass, Electrical & Secondary Channels
+| PID | Command | Parameter | Unit | Formula (`X = A*256+B`) | Verified Real-World Behavior |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **`4A`** | `02214A` | **Ignition Timing Advance — Cyl 1** | `° BTDC` | `X / 10` | `5.5°` off; `11–13°` idle; advances to `41.2°` under cruise |
+| **`4B`** | `02214B` | **Ignition Timing Advance — Cyl 2** | `° BTDC` | `X / 10` | Tracks Cylinder 1 spark advance (`5.5°` to `42.5°`) |
+| **`4C`** | `02214C` | **Target / Base Ignition Advance** | `° BTDC` | `X / 10` | `7.0°` off; `10–44°` running |
+| **`4F`** | `02214F` | **Cylinder 1 Air Load / Mass** | `mg/str` | `X / 10` | `0` off & decel cut; `130–292 mg` running |
+| **`50`** | `022150` | **Cylinder 2 Air Load / Mass** | `mg/str` | `X / 10` | `0` off & decel cut; `125–241 mg` running |
+| **`36`** | `022136` | **Battery / System Voltage** | `V` | `X * 0.0625` | `204` = `12.75V` key-on; rises to `14.2–14.4V` charging |
+| **`53` / `54`** | `022153` | **Idle Target RPM — Cyl 1 / Cyl 2** | `rpm` | `X` | `1600–1700` cold fast-idle target → drops to `1350` warm idle |
+| **`63`** | `022163` | **Engine Run / Crank Counter** | `raw` | `X` | Increments continuously while engine is running |
+| **`65` / `66`** | `022165` | **Engine State Flags 1 & 2** | `flag` | `A` (1-byte) | `0` when engine stopped; `1–5` running |
 
----
-
-## 5. Passive CAN Bus Broadcast IDs (500 kbps)
-
-When not polling via KWP2000, the Hypermotard 821 broadcasts continuous telemetry frames on the CAN bus (used by the instrument cluster, ABS, and DTC):
-
-| CAN ID | Sample Payload | Broadcast Contents |
-| :--- | :--- | :--- |
-| **`020`** | `00 90 05 30 39 60 03 C0` | **Engine RPM** (`0x0396` = `918 rpm`) & **Coolant Temp** (`0x3C` = `60°C`) |
-| **`080`** | `00 10 84 50 00 00 00 C8` | **Throttle Position (TPS)**, twistgrip torque request & engine status |
-| **`024`** | `58 E0 AF 54 00 00 00 00` | **Front & Rear Wheel Speeds** (ABS / DTC wheel speed sensors) |
-| **`018`** | `00 00 42 00 00 00 00 03` | **Battery Voltage** & **Gear Position / Neutral** |
-| **`120`** | `84 0B 01 00 00 00 04 02` | **Riding Mode**, kill-switch & immobilizer status |
-| **`022`** | `00 00 00 00 00 01 00 00` | **ABS / DTC Intervention** & brake switch status |
-
----
-
-## 6. Fuel Mapping & AFR Analysis Methodology (Without Wideband O2)
-
-1. **Riding Usage & Ride-by-Wire (RbW) Heatmaps:**
-   * Bin data into **500-RPM rows** (`1,500–9,500 RPM`) and **non-linear TPS columns** (`0, 2, 5, 10, 20, 40, 60, 80, 95%`), since street riding concentrates heavily in the **2%–10% throttle plate** range.
-   * Compare **Twistgrip (`02213B`)** against **Throttle Plate (`02213C`)** to observe how the RbW ECU progressively restricts butterfly opening below ~7,500 RPM even at 100% grip.
-2. **Closed-Loop Fuel Trim & Correction Map:**
-   * **Effective Fuel Trim (%):** Compare **Actual Injector Pulse Width (`022144` / `022145`)** against **Base Fuel Pulse Width (`022146` / `022147`)**:
-     $$\text{Total Fuel Correction (\%)} = \left(\frac{\text{PW}_{\text{actual}}}{\text{PW}_{\text{base}}} - 1\right) \times 100$$
-   * **Closed-Loop vs. Open-Loop Boundary:** Monitor **Narrowband O2 Voltage (`022140` / `022141`)**. Rapid oscillation between `~0.1V` and `~0.85V` indicates closed-loop `14.7:1` stoichiometric operation; steady voltage (`>0.8V`) under load indicates open-loop enrichment.
-   * **Estimated AFR (Speed-Density Calculation):** Combining **MAP (`02213D`)**, **IAT (`022132`)**, **RPM (`022130`)**, and **Actual Injector Pulse Width (`022144`)** allows estimating cylinder air mass vs. injected fuel mass across the map.
-3. **Data Filtering Best Practices:**
-   * Keep active logged PIDs to **5–6 channels max** per session to maintain high ELM327 sample rates (~8–12 Hz).
-   * Filter out cold-start warm-up (`ECT < 75°C`) and overrun deceleration fuel-cut (`TPS < 1.5%`).
-   * In Car Scanner **Settings $\rightarrow$ Data recording**, disable **Record GPS data** and **Record calculated sensors** to keep CSV exports clean.
+### E. Passive CAN Broadcast Frames (`ATSP6` + `ATH1` + `ATMA`)
+For reference, the Marelli 7SM and BBS also broadcast passive 500 kbps CAN frames continuously (used by MelcoDiag and the instrument cluster):
+* **`020`**: Engine RPM (bytes 4–5) & Coolant Temp (byte 7)
+* **`080`**: Throttle Plate Position & Torque Request flags
+* **`024`**: Front & Rear ABS Wheel Speed tooth counters (bytes 0–1 Front, bytes 2–3 Rear)
+* **`018`**: Battery Voltage & Gear/Neutral flags
+* **`120` / `022` / `200` / `230`**: Riding Mode, ABS/DTC status, Odometer, and Heartbeat
 
 ---
 
-## 7. Virtual Road Dyno Physics Equations (Power & Torque vs. RPM)
+## 4. High-Speed 10 Hz Logging Strategy (`~0.1s` Interval)
 
-Using timestamped **RPM**, **Vehicle Speed ($v$ in m/s)**, and **Twistgrip/Throttle ($\ge 90\%$ WOT)** during a single-gear pull (2nd or 3rd gear) averaged in both directions on a flat road:
+Because ELM327 adapters poll one PID at a time over Bluetooth serial (`~20–35 ms` round-trip per PID):
+* Polling **all 89 channels** takes ~7–10 seconds per row (useful only for static/slow discovery).
+* Polling **5–6 core channels** on `7E0` (without switching headers to `7E2`) achieves **~6–10 Hz (`0.10–0.16s` interval)**, ideal for **Virtual Road Dyno** pulls and **AFR/Fuel Trim** heatmaps.
 
-1. **Acceleration ($a$):**
-   $$a = \frac{\Delta v}{\Delta t} \quad (\text{m/s}^2)$$
-2. **Total Tractive Force at the Wheel ($F_{\text{total}}$):**
-   $$F_{\text{total}} = \underbrace{m_{\text{eff}} \cdot a}_{\text{Inertia}} + \underbrace{\frac{1}{2} \rho C_d A v^2}_{\text{Aero Drag}} + \underbrace{C_{rr} m g}_{\text{Rolling Resistance}}$$
-   * *Hypermotard 821 Defaults:* Wet mass + rider $m \approx 278\text{ kg}$ ($m_{\text{eff}} \approx 1.07 m$ for rotational inertia), $C_d A \approx 0.56\text{ m}^2$, $C_{rr} \approx 0.015$, drivetrain loss $\approx 10\%$.
-   * *Porsche 991.1 Carrera S PDK Defaults:* Mass + driver $m \approx 1,495\text{ kg}$, $C_d = 0.29$, $A = 2.02\text{ m}^2$, drivetrain loss $\approx 14\%$.
-3. **Wheel & Crank Power ($P$) and Torque ($\tau$):**
-   $$P_{\text{wheel}} (\text{W}) = F_{\text{total}} \cdot v \quad \Longrightarrow \quad P_{\text{crank}} (\text{hp}) = \frac{P_{\text{wheel}}}{745.7 \times (1 - \text{Loss}\%)}$$
-   $$\tau_{\\text{crank}} (\text{Nm}) = \frac{P_{\text{crank}} (\text{W}) \times 60}{2\pi \times \text{RPM}}$$
+### Recommended 6-PID Fast Logging Set (`7E0` Only)
+1. `022130` — **Engine RPM** (`rpm`)
+2. `02217A` — **Vehicle Speed** (`km/h`)
+3. `02213C` — **Throttle Plate TPS 1** (`%`)
+4. `02213B` — **Twistgrip APS** (`%`)
+5. `02213D` — **MAP Cylinder 1** (`kPa`)
+6. `022144` — **Actual Injector Time Cyl 1** (`ms`) *(or `022159` for Closed-Loop Fuel Trim `%`)*
 
 ---
 
-## 8. Python Mac/Windows KWP2000 Diagnostic Scanner Script
+## 5. Fuel Mapping & Virtual Road Dyno Formulas
 
-```python
-import serial
-import time
+### A. Closed-Loop Fuel Trim & Total Enrichment
+1. **Closed-Loop Short-Term Trim (`%`) from `ECU_59` / `ECU_5A`:**
+   $$\text{STFT (\%)} = \frac{\text{ECU\_59} - 40000}{400}$$
+2. **Total ECU Fuel Correction (`%`) from Actual (`ECU_44`) vs. Base (`ECU_46`) Injector Time:**
+   $$\text{Total Correction (\%)} = \left(\frac{\text{ECU\_44}}{\text{ECU\_46}} - 1\right) \times 100$$
 
-PORT = "/dev/cu.OBDII"  # Use "COM8" on Windows
-ser = serial.Serial(PORT, 38400, timeout=0.5)
+### B. Speed-Density Estimated AFR
+Using per-cylinder displacement $V_d = 0.4105\text{ L}$ (821cc twin), intake manifold pressure $P_{\text{MAP}}$ (`kPa`), intake air temperature $T_{\text{IAT}}$ (`°C`), volumetric efficiency $\eta_v \approx 0.88$, injector flow rate $\dot{m}_{\text{inj}} \approx 3.65\text{ mg/ms}$, and injector dead-time $t_0 \approx 0.85\text{ ms}$:
+$$m_{\text{air}} \text{ (mg)} = \frac{P_{\text{MAP}} \times V_d \times 28.97}{8.314 \times (T_{\text{IAT}} + 273.15)} \times \eta_v \times 1000$$
+$$m_{\text{fuel}} \text{ (mg)} = (\text{Inj\_ms} - t_0) \times \dot{m}_{\text{inj}}, \qquad \text{Estimated AFR} = \frac{m_{\text{air}}}{m_{\text{fuel}}}$$
 
-def send(cmd, wait=0.15):
-    ser.write((cmd + "\r").encode())
-    time.sleep(wait)
-    return ser.read_all().decode(errors="ignore").replace("\r", " ").strip()
+### C. Virtual Road Dyno (Wheel & Crank Power / Torque)
+During a single-gear full-throttle pull on a flat road (with vehicle + rider mass $m \approx 278\text{ kg}$, supermoto drag area $C_d A \approx 0.56\text{ m}^2$, air density $\rho \approx 1.18\text{ kg/m}^3$, rolling resistance $C_{rr} \approx 0.015$, and chain drivetrain loss $\approx 10\%$):
+$$v = \frac{\text{Speed}_{\text{km/h}}}{3.6} \text{ (m/s)}, \qquad a = \frac{\Delta v}{\Delta t} \text{ (m/s}^2\text{)}$$
+$$F_{\text{total}} = m \cdot a + \frac{1}{2} \rho C_d A v^2 + m g C_{rr}$$
+$$P_{\text{wheel}} \text{ (hp)} = \frac{F_{\text{total}} \cdot v}{745.7}, \qquad P_{\text{crank}} \text{ (hp)} = \frac{P_{\text{wheel}}}{0.90}, \qquad \tau_{\text{crank}} \text{ (Nm)} = \frac{P_{\text{crank}} \times 745.7 \times 60}{2\pi \times \text{RPM}}$$
 
-init_cmds = ["ATZ", "ATSP6", "ATE0", "ATH0", "ATS0", "ATCAF0", "ATSH7E0", "ATCRA7E8"]
-for cmd in init_cmds:
-    print(f"{cmd} -> {send(cmd, 0.4 if cmd == 'ATZ' else 0.1)}")
+---
 
-print(f"Session -> {send('021001', 0.2)}")
-
-for pid in range(0x30, 0x70):
-    if pid % 10 == 0:
-        send("021001", 0.1)  # Keep KWP2000 diagnostic session alive
-    req = f"0221{pid:02X}"
-    resp = send(req, 0.12)
-    if "61" in resp:
-        print(f"FOUND {req} -> {resp}")
-
-ser.close()
-```
+## 6. Android Logging Notes (Pydroid 3 + Kivy + Pyjnius)
+* **Bluetooth Socket Fallback:** On Android 8.0+ (e.g., Samsung Galaxy S7 Edge), standard `createRfcommSocketToServiceRecord` can fail SDP lookup on ELM327 `v1.5` modules. Use `createInsecureRfcommSocketToServiceRecord` with a Java reflection fallback to `createRfcommSocket(1)`.
+* **Preventing Sleep Mid-Ride:** Add `WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON` in `App.on_start()` and whitelist Pydroid 3 under Android's unmonitored battery apps so Doze does not throttle Bluetooth polling.
