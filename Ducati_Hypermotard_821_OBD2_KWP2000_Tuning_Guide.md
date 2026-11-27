@@ -103,7 +103,7 @@ Because ELM327 Bluetooth adapters poll sequentially (`~15–20 ms` per single-fr
 2. Append trailing **`1`** to each command (`0221301`) so the ELM327 returns the `>` prompt immediately after receiving 1 CAN frame instead of waiting for its `ATST` timeout.
 3. Poll slow temperature channels (`0221341` Oil Temp) once every 50 cycles.
 
-### Android (Samsung S7 Edge / Pydroid 3) Implementation Notes
+### Android (Pydroid 3 app) Implementation Notes
 * **RFCOMM Connection:** Use `device.createInsecureRfcommSocketToServiceRecord(UUID)` with a reflection fallback to `device.createRfcommSocket(1)` for older Android Classic Bluetooth stacks.
 * **Prevent Sleep Throttling:** Add `WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON` in `on_start()` and exempt Pydroid 3 from battery optimization so Android does not throttle Bluetooth polling mid-ride.
 
@@ -114,10 +114,13 @@ Because ELM327 Bluetooth adapters poll sequentially (`~15–20 ms` per single-fr
 * **Closed-Loop Fuel Trim (%):**
   $$	ext{STFT (\%)} = rac{	ext{ECU\_59} - 40000}{400}$$
 * **Total Enrichment vs. Base Map (%):**
-  $$	ext{Total Fuel Correction (\%)} = \left(rac{	ext{ECU\_44}}{	ext{ECU\_46}} - 1ight) 	imes 100$$
+  $$	ext{Total Fuel Correction (\%)} = \left(rac{	ext{ECU\_44}}{	ext{ECU\_46}} - 1
+ight) 	imes 100$$
 * **Speed-Density Air Mass per Cylinder (`mg`):**
   $$m_{	ext{air}} = V_{	ext{cyl}} 	imes \eta_v 	imes rac{P_{	ext{MAP}}}{R_{	ext{air}} \cdot T_{	ext{IAT}}}$$
   *(where $V_{	ext{cyl}} = 410.5	ext{ cm}^3$ per cylinder on the 821cc twin)*
 * **Virtual Road Dyno Wheel Power (`W`):**
-  $$P_{	ext{wheel}} = \left( m_{	ext{total}} \cdot rac{\Delta v}{\Delta t} + rac{1}{2} ho C_d A v^2 + m_{	ext{total}} g C_{rr} ight) \cdot v$$
+  $$P_{	ext{wheel}} = \left( m_{	ext{total}} \cdot rac{\Delta v}{\Delta t} + rac{1}{2} 
+ho C_d A v^2 + m_{	ext{total}} g C_{rr} 
+ight) \cdot v$$
   *(Baseline Hypermotard 821 constants: $m_{	ext{total}} pprox 278	ext{ kg}$ wet bike + rider, $C_d A pprox 0.56	ext{ m}^2$, $C_{rr} pprox 0.015$, drivetrain loss $pprox 10\%$)*
